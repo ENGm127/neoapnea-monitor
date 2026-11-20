@@ -49,7 +49,7 @@ Any static file server pointed at `app/` works as well, for example `python3 -m 
 |---|---|
 | **Breathing** | A chest sample above a threshold counts as a breath. Warning after 10 s without one, apnea alarm after 20 s. Breathing rate over the last 30 s. |
 | **Heart rate** | From the pulse wave: 8 Hz low-pass, peak detection, median of the last 8 beat intervals. Alarm below 100 or above 180 bpm. |
-| **SpO2** | Reported by the sensor once a second. Alarm below 80 %. |
+| **SpO2** | First estimate after a four-second sample window, then updated once a second. Invalid values are cleared; stale readings expire. Alarm below 80 % (prototype setting only). |
 | **Episodes** | Every pause longer than 20 s is recorded when breathing resumes: length, start, heart rate (min, max, mean) and SpO2 (min, mean). |
 | **Trend** | Heart rate and SpO2 every 15 s, keeping each block's extremes so a short dip is not averaged away. Summary of the last 30 min, 1 h, 12 h or 24 h. |
 | **Patients** | Records per patient, kept in the browser. Export as CSV or JSON. |
@@ -179,6 +179,7 @@ The tests run the simulator through the engine and check the serial parser, the 
 - **SpO2 is unvalidated.** Firmware now averages groups of four nominal 100 Hz red/IR samples to supply the SparkFun algorithm at 25 Hz with a rolling four-second window. This fixes the sample-rate mismatch in software, but the decimator, actual FIFO timing, motion/low-perfusion performance, and SpO2 accuracy still need bench validation. A generic MAX30102 breakout is not a validated neonatal oximeter.
 - **The pulse wave is sensitive to movement**, and so is the heart rate taken from it.
 - **Firmware timing and buffering.** The chest timer is now configured at approximately 8.003 Hz so two chest samples nominally align with each 0.25 s PPG frame. A one-bit timer flag can still lose events if the main loop is delayed, and serial output can block acquisition. PPG sample storage uses 32-bit values in the development branch, but timing, FIFO overflow, and end-to-end sample integrity still require hardware verification.
+- **Stale data and quality.** The app now clears invalid SpO2 results, expires SpO2 after 3 s without a valid update, and marks the whole frame stream lost after 2 s without a frame. These engineering timeouts do not assess signal quality or define clinical alarms.
 - **Records stay in one browser.** They are kept unencrypted in `localStorage` and are lost if the browser's site data is cleared; export them to keep them.
 
 ## Next steps
