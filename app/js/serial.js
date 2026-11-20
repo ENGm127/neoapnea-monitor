@@ -16,6 +16,13 @@ export class LineSplitter {
     this.rest = parts.pop();
     return parts.map((l) => l.replace(/\r$/, ""));
   }
+
+  /** Returns a final unterminated line when the stream reaches EOF. */
+  flush() {
+    const finalLine = this.rest.replace(/\r$/, "");
+    this.rest = "";
+    return finalLine ? [finalLine] : [];
+  }
 }
 
 /**
