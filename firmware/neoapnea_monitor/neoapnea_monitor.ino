@@ -45,6 +45,7 @@
 #include "MPU6050.h"
 #include "MAX30105.h"
 #include "spo2_algorithm.h"
+#include "spo2_stream.h"
 
 MPU6050 accelerometer;
 MAX30105 oximeter;
@@ -52,9 +53,7 @@ MAX30105 oximeter;
 const int PPG_PER_FRAME = 25;              // red samples in one frame, 0.25 s at 100 Hz
 const int ACC_PER_FRAME = 2;               // accelerometer samples in one frame
 const int FRAME_LENGTH = 1 + ACC_PER_FRAME + PPG_PER_FRAME + 1;
-const uint8_t SPO2_DECIMATION = 4;         // 100 Hz raw FIFO -> 25 Hz algorithm input
-const uint8_t SPO2_UPDATE_SAMPLES = 25;    // update every 1 s after the initial 4 s
-const int SPO2_WINDOW = 100;                // 4 s at the algorithm's required 25 Hz
+const int SPO2_WINDOW = Spo2Stream::WINDOW; // 4 s at the algorithm's required 25 Hz
 
 volatile bool accelerometerDue = false;    // set by the Timer1 interrupt
 bool sensorsReady = false;
@@ -69,18 +68,10 @@ uint32_t redSamples[PPG_PER_FRAME];
 int ppgCount = 0;
 bool ppgReady = false;
 
-// MAX30102 FIFO output is nominally 100 Hz. Keep browser PPG at this rate,
- // but feed the SparkFun routine a separately averaged 25 Hz stream.
-uint32_t spo2RedRing[SPO2_WINDOW];
-uint32_t spo2IrRing[SPO2_WINDOW];
+// Separate rolling 25 Hz stream for the SparkFun algorithm.
+Spo2Stream spo2Stream;
 uint32_t spo2RedLinear[SPO2_WINDOW];
 uint32_t spo2IrLinear[SPO2_WINDOW];
-uint32_t redAccumulator = 0;
-uint32_t irAccumulator = 0;
-uint8_t decimationCount = 0;
-uint8_t spo2WriteIndex = 0;       // next ring slot; also oldest sample once full
-uint8_t spo2SamplesStored = 0;
-uint8_t spo2SamplesSinceUpdate = 0;
 
 int32_t spo2;
 int8_t spo2Valid;
@@ -157,47 +148,18 @@ void loop() {
     ppgCount++;
     oximeter.nextSample();
 
-    // Boxcar low-pass followed by decimation: 4 raw 100 Hz samples become
-    // one 25 Hz sample, matching FreqS=25 and BUFFER_SIZE=100 in SparkFun.
-    redAccumulator += red;
-    irAccumulator += ir;
-    decimationCount++;
-    if (decimationCount == SPO2_DECIMATION) {
-      spo2RedRing[spo2WriteIndex] = redAccumulator / SPO2_DECIMATION;
-      spo2IrRing[spo2WriteIndex] = irAccumulator / SPO2_DECIMATION;
-      spo2WriteIndex = (spo2WriteIndex + 1) % SPO2_WINDOW;
-      bool calculateSpo2 = false;
-      if (spo2SamplesStored < SPO2_WINDOW) {
-        spo2SamplesStored++;
-        calculateSpo2 = (spo2SamplesStored == SPO2_WINDOW); // first complete 4 s window
-      } else {
-        spo2SamplesSinceUpdate++;
-        if (spo2SamplesSinceUpdate >= SPO2_UPDATE_SAMPLES) {
-          calculateSpo2 = true; // then update once per second
-          spo2SamplesSinceUpdate = 0;
-        }
-      }
-      redAccumulator = 0;
-      irAccumulator = 0;
-      decimationCount = 0;
-
-      if (calculateSpo2) {
-        // Ring write index points to the oldest sample. Linearize the last
-        // 4 seconds because the Maxim routine expects chronological samples.
-        for (int i = 0; i < SPO2_WINDOW; i++) {
-          const uint8_t index = (spo2WriteIndex + i) % SPO2_WINDOW;
-          spo2RedLinear[i] = spo2RedRing[index];
-          spo2IrLinear[i] = spo2IrRing[index];
-        }
-        maxim_heart_rate_and_oxygen_saturation(
-          spo2IrLinear, SPO2_WINDOW, spo2RedLinear,
-          &spo2, &spo2Valid, &heartRate, &heartRateValid
-        );
-        Serial.print(F("SPO2= "));
-        Serial.print(spo2, DEC);
-        Serial.print(", ");
-        Serial.println(spo2Valid, DEC);
-      }
+    // The helper averages 4 raw samples into 25 Hz, maintains the rolling
+    // 4 s window, and requests an estimate once per second after warm-up.
+    if (spo2Stream.push(red, ir)) {
+      spo2Stream.copyChronological(spo2RedLinear, spo2IrLinear);
+      maxim_heart_rate_and_oxygen_saturation(
+        spo2IrLinear, SPO2_WINDOW, spo2RedLinear,
+        &spo2, &spo2Valid, &heartRate, &heartRateValid
+      );
+      Serial.print(F("SPO2= "));
+      Serial.print(spo2, DEC);
+      Serial.print(", ");
+      Serial.println(spo2Valid, DEC);
     }
 
     if (ppgCount == PPG_PER_FRAME) {
