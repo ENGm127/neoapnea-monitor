@@ -30,7 +30,7 @@ The current detector uses one raw accelerometer axis and a fixed threshold. Its 
 
 ### 3. Timing and data integrity in firmware
 
-Timer1 is now configured at approximately 8.003 Hz (16 MHz / (1024 × 1953)) so two chest samples nominally align with each 0.25 s frame carrying 25 PPG samples. This removes the deliberate 10 Hz versus 8 Hz cadence mismatch in the previous sketch, but it does not prove that samples are never lost. `volatile bool accelerometerDue` remains a one-bit flag; multiple timer events can collapse into one if the main loop is delayed. Sensor reads and Serial output are coupled in the same loop; serial output can block and delay acquisition. Replace the boolean with a counter/timestamped queue, track overruns, and decouple sampling from serial transmission using bounded buffers. Include sequence numbers/timestamps in a versioned protocol.
+Timer1 now uses a fractional divider: at 16 MHz / 1024 there are 15625 timer ticks per second, and seven periods of 1953 ticks plus one of 1954 ticks produce exactly 8 Hz on average. Two chest samples therefore nominally align with each 0.25 s frame carrying 25 PPG samples. This removes the deliberate 10 Hz versus 8 Hz cadence mismatch in the previous sketch, but it does not prove that samples are never lost. `volatile bool accelerometerDue` remains a one-bit flag; multiple timer events can collapse into one if the main loop is delayed. Sensor reads and Serial output are coupled in the same loop; serial output can block and delay acquisition. Replace the boolean with a counter/timestamped queue, track overruns, and decouple sampling from serial transmission using bounded buffers. Include sequence numbers/timestamps in a versioned protocol.
 
 ### 4. Sensor initialization and status
 
