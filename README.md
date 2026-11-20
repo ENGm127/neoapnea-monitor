@@ -178,7 +178,7 @@ The tests run the simulator through the engine and check the serial parser, the 
 - **Obstructive apnea is missed.** When the airway is blocked the chest keeps moving while no air flows, so a chest-motion sensor still sees breathing.
 - **SpO2 is unvalidated.** SparkFun's `maxim_heart_rate_and_oxygen_saturation()` assumes 25 samples per second but is fed 100. The MAX30102 is not a validated neonatal oximeter, and neonatal probes go on a hand or foot.
 - **The pulse wave is sensitive to movement**, and so is the heart rate taken from it.
-- **Firmware details.** The accelerometer timer fires at 10 Hz but each frame carries the latest two readings, so the stream has 8 chest samples per second and about one reading in five is dropped. PPG samples are sent as 16-bit integers; readings above 32767 would wrap.
+- **Firmware timing and buffering.** The accelerometer timer fires at 10 Hz but a one-bit flag can lose timer events if the main loop is delayed; frames carry two chest samples and serial output can block acquisition. PPG sample storage uses 32-bit values in the development branch, but timing, FIFO overflow, and end-to-end sample integrity still require hardware verification.
 - **Records stay in one browser.** They are kept unencrypted in `localStorage` and are lost if the browser's site data is cleared; export them to keep them.
 
 ## Next steps
