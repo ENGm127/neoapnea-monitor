@@ -16,9 +16,9 @@
  *   "SparkFun MAX3010x Pulse and Proximity Sensor Library"   -> MAX30105.h, spo2_algorithm.h
  *
  * Sampling:
- *   Accelerometer: only the z axis is used. Timer1 samples at approximately
- *   8 Hz (16 MHz / 1024 / 1953) so two chest samples align with each 0.25 s
- *   serial frame. The nominal web sample rate is therefore 8 Hz.
+ *   Accelerometer: only the z axis is used. Timer1 uses a fractional divider
+ *   to average exactly 8 samples/s (7 periods of 1953 ticks and 1 of 1954
+ *   ticks at 16 MHz / 1024), aligning two chest samples with each 0.25 s frame.
  *   Pulse oximeter: sensor configured for 100 samples/s with no on-chip
  *   averaging. The browser receives red samples at 100 Hz. For the SparkFun
  *   algorithm, firmware averages non-overlapping groups of four samples to
@@ -56,6 +56,7 @@ const int FRAME_LENGTH = 1 + ACC_PER_FRAME + PPG_PER_FRAME + 1;
 const int SPO2_WINDOW = Spo2Stream::WINDOW; // 4 s at the algorithm's required 25 Hz
 
 volatile bool accelerometerDue = false;    // set by the Timer1 interrupt
+volatile uint8_t timerPhase = 0;            // fractional 8 Hz timer divider
 bool sensorsReady = false;
 
 int32_t frame[FRAME_LENGTH];               // signed chest counts and full-width PPG values
@@ -105,13 +106,14 @@ void setup() {
   oximeter.setup(ledBrightness, sampleAverage, ledMode, sampleRate, pulseWidth, adcRange);
 
   // Start the chest sampling timer only after both sensors are initialized.
-  // Timer1 in CTC mode: 16 MHz / (1024 * 1953) ~= 8.003 Hz.
-  // Two samples align nominally with each 25-sample PPG frame (0.25 s).
+  // Timer1 in CTC mode. At 16 MHz / 1024 there are exactly 15625 timer
+  // ticks per second; 7*1953 + 1954 = 15625, giving exactly 8 Hz on average.
+  // The ISR alternates TOP values to distribute the fractional timer period.
   cli();
   TCCR1A = 0;
   TCCR1B = 0;
   TCNT1 = 0;
-  OCR1A = 1952;
+  OCR1A = 1952; // 1953 timer ticks for the first period
   TCCR1B |= (1 << WGM12);
   TCCR1B |= (1 << CS12) | (1 << CS10);
   TIMSK1 |= (1 << OCIE1A);
@@ -188,4 +190,7 @@ void loop() {
 
 ISR(TIMER1_COMPA_vect) {
   accelerometerDue = true;
+  timerPhase++;
+  if (timerPhase >= 8) timerPhase = 0;
+  OCR1A = (timerPhase == 7) ? 1953 : 1952;
 }
