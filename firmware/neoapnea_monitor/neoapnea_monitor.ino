@@ -19,10 +19,10 @@
  *   Accelerometer: only the z axis is used. Timer1 samples at approximately
  *   8 Hz (16 MHz / 1024 / 1953) so two chest samples align with each 0.25 s
  *   serial frame. The nominal web sample rate is therefore 8 Hz.
- *   Pulse oximeter: sensor configured at 200 Hz with 2-sample on-chip
- *   averaging, yielding a nominal 100 FIFO samples/s. The browser receives
- *   red samples at 100 Hz. For the SparkFun algorithm, firmware averages
- *   non-overlapping groups of four samples to create a 25 Hz stream, keeps
+ *   Pulse oximeter: sensor configured for 100 samples/s with no on-chip
+ *   averaging. The browser receives red samples at 100 Hz. For the SparkFun
+ *   algorithm, firmware averages non-overlapping groups of four samples to
+ *   create a 25 Hz stream, keeps
  *   a rolling 100-sample (4 s) window, and updates the estimate once per second.
  *
  * Serial output at 57600 baud:
@@ -97,9 +97,9 @@ void setup() {
   }
 
   byte ledBrightness = 60;   // 0 = off to 255 = 50 mA
-  byte sampleAverage = 2;    // 1, 2, 4, 8, 16 or 32
+  byte sampleAverage = 1;    // preserve the 100 Hz FIFO stream for the browser
   byte ledMode = 2;          // 1 = red only, 2 = red + IR, 3 = red + IR + green
-  byte sampleRate = 200;     // 50, 100, 200, 400, 800, 1000, 1600 or 3200
+  byte sampleRate = 100;     // 100 FIFO samples/s with sampleAverage=1
   int pulseWidth = 69;       // 69, 118, 215 or 411 us
   int adcRange = 4096;       // 2048, 4096, 8192 or 16384
   oximeter.setup(ledBrightness, sampleAverage, ledMode, sampleRate, pulseWidth, adcRange);
