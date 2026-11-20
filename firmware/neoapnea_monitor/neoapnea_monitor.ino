@@ -54,13 +54,13 @@ const int SPO2_WINDOW = 100;               // samples per SpO2 estimate
 
 volatile bool accelerometerDue = false;    // set by the Timer1 interrupt
 
-int frame[FRAME_LENGTH];                   // start marker, z-axis samples, red samples, end marker
+int32_t frame[FRAME_LENGTH];               // signed chest counts and full-width PPG values
 
 int accSamples[ACC_PER_FRAME];
 int accCount = 0;
 bool accReady = false;
 
-int redSamples[PPG_PER_FRAME];
+uint32_t redSamples[PPG_PER_FRAME];
 int ppgCount = 0;
 bool ppgReady = false;
 
@@ -135,7 +135,7 @@ void loop() {
     redSamples[ppgCount] = oximeter.getFIFORed();
     redWindow[windowCount] = redSamples[ppgCount];
     // Through int, like the red samples, so the SpO2 estimate sees 16-bit values.
-    irWindow[windowCount] = (int)oximeter.getFIFOIR();
+    irWindow[windowCount] = oximeter.getFIFOIR();
     ppgCount++;
     windowCount++;
     oximeter.nextSample();
