@@ -33,6 +33,7 @@ test("invalid SpO2 samples clear the previous valid value", () => {
   assert.equal(monitor.spo2, 97);
   monitor.feed("SPO2= -999, 0");
   assert.equal(monitor.spo2, null);
+  assert.equal(monitor.lastSpo2ReceivedAt, null);
   assert.equal(monitor.spo2Alarm, false);
 });
 
@@ -40,10 +41,11 @@ test("stale SpO2 is expired using elapsed wall time, not sample count", () => {
   const monitor = new Monitor();
   monitor.feed("SPO2= 96, 1");
   const receivedAt = monitor.lastSpo2ReceivedAt;
-  monitor.expireStale(receivedAt + 3001);
+  assert.equal(monitor.expireStale(receivedAt + 3001), true);
   assert.equal(monitor.spo2, null);
   assert.equal(monitor.spo2Stale, true);
   assert.equal(monitor.spo2Alarm, false);
+  assert.equal(monitor.expireStale(receivedAt + 4000), false);
 });
 
 test("a stopped frame stream is marked stale and fresh frames recover it", () => {
