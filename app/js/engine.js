@@ -119,9 +119,11 @@ export class Monitor {
         this.spo2Stale = false;
       } else {
         this.spo2 = null;
+        this.lastSpo2ReceivedAt = null;
         this.spo2Alarm = false;
         this.spo2Stale = false;
       }
+      this.emit("spo2", this);
       return "spo2";
     }
     return null;
@@ -176,16 +178,20 @@ export class Monitor {
    * leave an old vital sign looking current.
    */
   expireStale(now = monotonicNow()) {
-    if (this.lastFrameReceivedAt !== null && now - this.lastFrameReceivedAt > 2000) {
+    let changed = false;
+    if (!this.frameStale && this.lastFrameReceivedAt !== null && now - this.lastFrameReceivedAt > 2000) {
       this.frameStale = true;
       this.hr = 0;
       this.hrAlarm = false;
+      changed = true;
     }
-    if (this.lastSpo2ReceivedAt !== null && now - this.lastSpo2ReceivedAt > 3000) {
+    if (!this.spo2Stale && this.lastSpo2ReceivedAt !== null && now - this.lastSpo2ReceivedAt > 3000) {
       this.spo2 = null;
       this.spo2Alarm = false;
       this.spo2Stale = true;
+      changed = true;
     }
+    return changed;
   }
 
   /** A breath is a chest sample above the threshold; the alarm grows with the time since the last one. */
