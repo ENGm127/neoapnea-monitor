@@ -16,6 +16,13 @@ export class LineSplitter {
     this.rest = parts.pop();
     return parts.map((l) => l.replace(/\r$/, ""));
   }
+
+  /** Returns a final unterminated line when the stream reaches EOF. */
+  flush() {
+    const finalLine = this.rest.replace(/\r$/, "");
+    this.rest = "";
+    return finalLine ? [finalLine] : [];
+  }
 }
 
 /**
@@ -39,6 +46,8 @@ export async function openSerial(onLine, { baudRate = BAUD_RATE } = {}) {
         for (const line of splitter.push(value)) onLine(line);
       }
     } finally {
+      // Flush the final partial line on clean EOF or a read failure/disconnect.
+      for (const line of splitter.flush()) onLine(line);
       reader.releaseLock();
     }
   })();

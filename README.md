@@ -49,7 +49,7 @@ Any static file server pointed at `app/` works as well, for example `python3 -m 
 |---|---|
 | **Breathing** | A chest sample above a threshold counts as a breath. Warning after 10 s without one, apnea alarm after 20 s. Breathing rate over the last 30 s. |
 | **Heart rate** | From the pulse wave: 8 Hz low-pass, peak detection, median of the last 8 beat intervals. Alarm below 100 or above 180 bpm. |
-| **SpO2** | Reported by the sensor once a second. Alarm below 80 %. |
+| **SpO2** | First estimate after a four-second sample window, then updated once a second. Invalid values are cleared; stale readings expire. Alarm below 80 % (prototype setting only). |
 | **Episodes** | Every pause longer than 20 s is recorded when breathing resumes: length, start, heart rate (min, max, mean) and SpO2 (min, mean). |
 | **Trend** | Heart rate and SpO2 every 15 s, keeping each block's extremes so a short dip is not averaged away. Summary of the last 30 min, 1 h, 12 h or 24 h. |
 | **Patients** | Records per patient, kept in the browser. Export as CSV or JSON. |
@@ -140,10 +140,10 @@ Each recorded episode has these fields, in the app and in the CSV and JSON expor
 
 ```
 Buffer: 1, az0, az1, red0, red1, ..., red24, 1    every 0.25 s
-SPO2= 96, 1                                       after every 100 PPG samples
+SPO2= 96, 1                                       after the initial 4 s, then once per second
 ```
 
-Text at 57600 baud, one line per message. A `Buffer` line carries a start marker, two chest samples (z axis, raw counts), 25 PPG samples (red LED) and an end marker; lines with any other shape are dropped. `SPO2` carries the value and a validity flag. Any other line, such as the start-up messages, is ignored. [`app/js/simulator.js`](app/js/simulator.js) produces the same lines.
+Text at 57600 baud, one line per message. A `Buffer` line carries a start marker, two chest samples (z axis, raw counts), 25 PPG samples (red LED) and an end marker; lines with any other shape are dropped. `SPO2` carries the value and a validity flag; the first estimate follows a four-second warm-up, then updates once per second using a rolling four-second window. Any other line, such as the start-up messages, is ignored. [`app/js/simulator.js`](app/js/simulator.js) produces the same lines.
 
 ## Project layout
 
@@ -176,9 +176,10 @@ The tests run the simulator through the engine and check the serial parser, the 
 - **No clinical validation.** The monitor was checked on a bench rig that rocks the accelerometer up and down, and with synthetic signals. Neither shows how it would perform on an infant.
 - **Breath detection is a fixed threshold on the raw z axis.** It depends on how the sensor sits on the chest. The MPU-6050 is not sensitive enough for a preterm infant's breathing; the bench tests used larger movements than a baby makes.
 - **Obstructive apnea is missed.** When the airway is blocked the chest keeps moving while no air flows, so a chest-motion sensor still sees breathing.
-- **SpO2 is unvalidated.** SparkFun's `maxim_heart_rate_and_oxygen_saturation()` assumes 25 samples per second but is fed 100. The MAX30102 is not a validated neonatal oximeter, and neonatal probes go on a hand or foot.
+- **SpO2 is unvalidated.** Firmware now averages groups of four nominal 100 Hz red/IR samples to supply the SparkFun algorithm at 25 Hz with a rolling four-second window. This fixes the sample-rate mismatch in software, but the decimator, actual FIFO timing, motion/low-perfusion performance, and SpO2 accuracy still need bench validation. A generic MAX30102 breakout is not a validated neonatal oximeter.
 - **The pulse wave is sensitive to movement**, and so is the heart rate taken from it.
-- **Firmware details.** The accelerometer timer fires at 10 Hz but each frame carries the latest two readings, so the stream has 8 chest samples per second and about one reading in five is dropped. PPG samples are sent as 16-bit integers; readings above 32767 would wrap.
+- **Firmware timing and buffering.** The chest timer uses a fractional divider to average exactly 8 Hz so two chest samples nominally align with each 0.25 s PPG frame. A one-bit timer flag can still lose events if the main loop is delayed, and serial output can block acquisition. PPG sample storage uses 32-bit values in the development branch, but timing, FIFO overflow, and end-to-end sample integrity still require hardware verification.
+- **Stale data and quality.** The app now clears invalid SpO2 results, expires SpO2 after 3 s without a valid update, and marks the whole frame stream lost after 2 s without a frame. These engineering timeouts do not assess signal quality or define clinical alarms.
 - **Records stay in one browser.** They are kept unencrypted in `localStorage` and are lost if the browser's site data is cleared; export them to keep them.
 
 ## Next steps

@@ -16,12 +16,14 @@
  *   "SparkFun MAX3010x Pulse and Proximity Sensor Library"   -> MAX30105.h, spo2_algorithm.h
  *
  * Sampling:
- *   Accelerometer: only the z axis is used. Timer1 sets a flag 10 times per
- *   second (16 MHz / 256 / 6250) and the loop reads the sensor on each flag.
- *   A frame carries the latest two readings, so the stream holds 8
- *   accelerometer samples per second.
- *   Pulse oximeter: red and infrared at 200 Hz with 2-sample averaging,
- *   100 samples per second.
+ *   Accelerometer: only the z axis is used. Timer1 uses a fractional divider
+ *   to average exactly 8 samples/s (7 periods of 1953 ticks and 1 of 1954
+ *   ticks at 16 MHz / 1024), aligning two chest samples with each 0.25 s frame.
+ *   Pulse oximeter: sensor configured for 100 samples/s with no on-chip
+ *   averaging. The browser receives red samples at 100 Hz. For the SparkFun
+ *   algorithm, firmware averages non-overlapping groups of four samples to
+ *   create a 25 Hz stream, keeps
+ *   a rolling 100-sample (4 s) window, and updates the estimate once per second.
  *
  * Serial output at 57600 baud:
  *   Buffer: 1, az0, az1, red0, ..., red24, 1    every 0.25 s, 29 values;
@@ -32,17 +34,18 @@
  * Lines that start with anything else are status messages; the app ignores them.
  *
  * Known limitations:
- *   SparkFun's maxim_heart_rate_and_oxygen_saturation() assumes 25 samples
- *   per second (FreqS in spo2_algorithm.h), but it is given 100 samples taken
- *   at 100 Hz, so treat the SpO2 it returns as unvalidated.
- *   Red and infrared samples are stored as 16-bit int, so readings must stay
- *   below 32768 to arrive unchanged.
+ *   The SparkFun algorithm's 25 Hz input contract is matched by a four-sample
+ *   boxcar average/decimator. The estimate remains an unvalidated research
+ *   output: correct sample rate does not establish SpO2 accuracy or neonatal
+ *   suitability. PPG samples are stored in 32-bit variables to preserve the
+ *   sensor's raw range. Actual FIFO timing and loss still require measurement.
  */
 
 #include "Wire.h"
 #include "MPU6050.h"
 #include "MAX30105.h"
 #include "spo2_algorithm.h"
+#include "spo2_stream.h"
 
 MPU6050 accelerometer;
 MAX30105 oximeter;
@@ -50,23 +53,26 @@ MAX30105 oximeter;
 const int PPG_PER_FRAME = 25;              // red samples in one frame, 0.25 s at 100 Hz
 const int ACC_PER_FRAME = 2;               // accelerometer samples in one frame
 const int FRAME_LENGTH = 1 + ACC_PER_FRAME + PPG_PER_FRAME + 1;
-const int SPO2_WINDOW = 100;               // samples per SpO2 estimate
+const int SPO2_WINDOW = Spo2Stream::WINDOW; // 4 s at the algorithm's required 25 Hz
 
 volatile bool accelerometerDue = false;    // set by the Timer1 interrupt
+volatile uint8_t timerPhase = 0;            // fractional 8 Hz timer divider
+bool sensorsReady = false;
 
-int frame[FRAME_LENGTH];                   // start marker, z-axis samples, red samples, end marker
+int32_t frame[FRAME_LENGTH];               // signed chest counts and full-width PPG values
 
 int accSamples[ACC_PER_FRAME];
 int accCount = 0;
 bool accReady = false;
 
-int redSamples[PPG_PER_FRAME];
+uint32_t redSamples[PPG_PER_FRAME];
 int ppgCount = 0;
 bool ppgReady = false;
 
-uint32_t redWindow[SPO2_WINDOW];
-uint32_t irWindow[SPO2_WINDOW];
-int windowCount = 0;
+// Separate rolling 25 Hz stream for the SparkFun algorithm.
+Spo2Stream spo2Stream;
+uint32_t spo2RedLinear[SPO2_WINDOW];
+uint32_t spo2IrLinear[SPO2_WINDOW];
 
 int32_t spo2;
 int8_t spo2Valid;
@@ -77,44 +83,50 @@ void setup() {
   Serial.begin(57600);
   Wire.begin();
   accelerometer.initialize();
-  oximeter.begin();
 
-  // Timer1 in CTC mode with a 256 prescaler: compare match every
-  // 6250 ticks, 16 MHz / (256 * 6250) = 10 Hz.
+  const bool accelerometerOk = accelerometer.testConnection();
+  Serial.println(accelerometerOk ? "Accelerometer ready" : "ERROR: accelerometer not found");
+
+  const bool oximeterOk = oximeter.begin();
+  Serial.println(oximeterOk ? "Pulse oximeter ready" : "ERROR: pulse oximeter not found");
+
+  // Do not start acquisition or emit plausible-looking data if either sensor
+  // failed initialization. The app will receive an explicit error status.
+  if (!accelerometerOk || !oximeterOk) {
+    Serial.println("ERROR: sensor initialization failed; acquisition stopped");
+    return;
+  }
+
+  byte ledBrightness = 60;   // 0 = off to 255 = 50 mA
+  byte sampleAverage = 1;    // preserve the 100 Hz FIFO stream for the browser
+  byte ledMode = 2;          // 1 = red only, 2 = red + IR, 3 = red + IR + green
+  byte sampleRate = 100;     // 100 FIFO samples/s with sampleAverage=1
+  int pulseWidth = 69;       // 69, 118, 215 or 411 us
+  int adcRange = 4096;       // 2048, 4096, 8192 or 16384
+  oximeter.setup(ledBrightness, sampleAverage, ledMode, sampleRate, pulseWidth, adcRange);
+
+  // Start the chest sampling timer only after both sensors are initialized.
+  // Timer1 in CTC mode. At 16 MHz / 1024 there are exactly 15625 timer
+  // ticks per second; 7*1953 + 1954 = 15625, giving exactly 8 Hz on average.
+  // The ISR alternates TOP values to distribute the fractional timer period.
   cli();
   TCCR1A = 0;
   TCCR1B = 0;
   TCNT1 = 0;
-  OCR1A = 6249;
-  TCCR1B |= (1 << WGM12);    // CTC mode
-  TCCR1B |= (1 << CS12);     // prescaler 256
-  TIMSK1 |= (1 << OCIE1A);   // enable the compare A interrupt
+  OCR1A = 1952; // 1953 timer ticks for the first period
+  TCCR1B |= (1 << WGM12);
+  TCCR1B |= (1 << CS12) | (1 << CS10);
+  TIMSK1 |= (1 << OCIE1A);
   sei();
-
-  if (accelerometer.testConnection()) {
-    Serial.println("Accelerometer ready");
-  } else {
-    Serial.println("Accelerometer not found");
-  }
-  if (oximeter.begin() == false) {
-    Serial.println("Pulse oximeter not found");
-  } else {
-    Serial.println("Pulse oximeter ready");
-  }
-
-  byte ledBrightness = 60;   // 0 = off to 255 = 50 mA
-  byte sampleAverage = 2;    // 1, 2, 4, 8, 16 or 32
-  byte ledMode = 2;          // 1 = red only, 2 = red + IR, 3 = red + IR + green
-  byte sampleRate = 200;     // 50, 100, 200, 400, 800, 1000, 1600 or 3200
-  int pulseWidth = 69;       // 69, 118, 215 or 411 us
-  int adcRange = 4096;       // 2048, 4096, 8192 or 16384
-  oximeter.setup(ledBrightness, sampleAverage, ledMode, sampleRate, pulseWidth, adcRange);
+  sensorsReady = true;
 
   frame[0] = 1;
   frame[FRAME_LENGTH - 1] = 1;
 }
 
 void loop() {
+  if (!sensorsReady) return;
+
   if (accelerometerDue) {
     int16_t ax, ay, az;
     accelerometer.getAcceleration(&ax, &ay, &az);
@@ -132,13 +144,25 @@ void loop() {
 
   oximeter.check();
   while (oximeter.available()) {
-    redSamples[ppgCount] = oximeter.getFIFORed();
-    redWindow[windowCount] = redSamples[ppgCount];
-    // Through int, like the red samples, so the SpO2 estimate sees 16-bit values.
-    irWindow[windowCount] = (int)oximeter.getFIFOIR();
+    const uint32_t red = oximeter.getFIFORed();
+    const uint32_t ir = oximeter.getFIFOIR();
+    redSamples[ppgCount] = red;
     ppgCount++;
-    windowCount++;
     oximeter.nextSample();
+
+    // The helper averages 4 raw samples into 25 Hz, maintains the rolling
+    // 4 s window, and requests an estimate once per second after warm-up.
+    if (spo2Stream.push(red, ir)) {
+      spo2Stream.copyChronological(spo2RedLinear, spo2IrLinear);
+      maxim_heart_rate_and_oxygen_saturation(
+        spo2IrLinear, SPO2_WINDOW, spo2RedLinear,
+        &spo2, &spo2Valid, &heartRate, &heartRateValid
+      );
+      Serial.print(F("SPO2= "));
+      Serial.print(spo2, DEC);
+      Serial.print(", ");
+      Serial.println(spo2Valid, DEC);
+    }
 
     if (ppgCount == PPG_PER_FRAME) {
       for (int i = 0; i < PPG_PER_FRAME; i++) {
@@ -148,15 +172,6 @@ void loop() {
       ppgReady = true;
     }
 
-    if (windowCount == SPO2_WINDOW) {
-      maxim_heart_rate_and_oxygen_saturation(irWindow, SPO2_WINDOW, redWindow, &spo2, &spo2Valid,
-                                             &heartRate, &heartRateValid);
-      windowCount = 0;
-      Serial.print(F("SPO2= "));
-      Serial.print(spo2, DEC);
-      Serial.print(", ");
-      Serial.println(spo2Valid, DEC);
-    }
   }
 
   if (accReady && ppgReady) {
@@ -175,4 +190,7 @@ void loop() {
 
 ISR(TIMER1_COMPA_vect) {
   accelerometerDue = true;
+  timerPhase++;
+  if (timerPhase >= 8) timerPhase = 0;
+  OCR1A = (timerPhase == 7) ? 1953 : 1952;
 }
