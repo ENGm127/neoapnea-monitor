@@ -23,6 +23,6 @@ test("serial splitter flushes a final unterminated line at EOF", () => {
 
 test("serial splitter does not emit an empty final line", () => {
   const splitter = new LineSplitter();
-  assert.deepEqual(splitter.push("Buffer: 1, 2\\r\\n"), ["Buffer: 1, 2"]);
+  assert.deepEqual(splitter.push("Buffer: 1, 2\r\n"), ["Buffer: 1, 2"]);
   assert.deepEqual(splitter.flush(), []);
 });
