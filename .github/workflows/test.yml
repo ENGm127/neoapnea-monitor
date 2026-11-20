@@ -11,3 +11,5 @@ jobs:
         with:
           node-version: 24
       - run: node --test 'tests/*.test.mjs'
+      - name: Test firmware SpO2 stream helper
+        run: g++ -std=c++11 -Wall -Wextra -Werror -Ifirmware/neoapnea_monitor tests/firmware/spo2_stream_test.cpp -o /tmp/spo2_stream_test && /tmp/spo2_stream_test
