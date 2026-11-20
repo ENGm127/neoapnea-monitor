@@ -36,6 +36,7 @@ function newSession(startedAt = Date.now()) {
   monitor = new Monitor({}, { startedAt });
   const simulated = source?.kind === "demo";
   monitor.on("frame", () => { dirty = true; });
+  monitor.on("spo2", () => { dirty = true; });
   monitor.on("episode", (episode) => {
     if (store.activeId) store.addEpisode(store.activeId, { ...episode, simulated });
     renderSide();
@@ -241,6 +242,9 @@ function renderPatientButton() {
 }
 
 function loop() {
+  // Freshness transitions must be checked even after the stream stops and no
+  // further frame event can mark the UI dirty.
+  if (monitor.expireStale(performance.now())) dirty = true;
   if (dirty) {
     dirty = false;
     renderLive();
