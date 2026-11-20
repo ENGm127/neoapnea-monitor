@@ -45,9 +45,9 @@ export async function openSerial(onLine, { baudRate = BAUD_RATE } = {}) {
         if (finished) break;
         for (const line of splitter.push(value)) onLine(line);
       }
-      // TextDecoder may leave a final line without a newline when the device disconnects.
-      for (const line of splitter.flush()) onLine(line);
     } finally {
+      // Flush the final partial line on clean EOF or a read failure/disconnect.
+      for (const line of splitter.flush()) onLine(line);
       reader.releaseLock();
     }
   })();
