@@ -13,7 +13,8 @@ This is a software/firmware engineering audit of the current prototype. It is no
 3. **PPG integer width** — firmware frame storage is now `int32_t`, red samples are `uint32_t`, and IR samples are copied without narrowing through a 16-bit AVR `int`.
 4. **SpO2 algorithm input timing** — firmware now preserves the 100 Hz raw PPG stream for the browser, averages each non-overlapping group of four red/IR samples to 25 Hz for the SparkFun routine, maintains a rolling 100-sample (4 s) window, computes the first estimate after 4 s, and updates every 1 s thereafter. This matches the source constants but is not validation of the oximetry result.
 5. **Sensor startup gating** — firmware initializes each sensor once and does not start the acquisition timer if either sensor initialization fails.
-6. **Regression tests added** — JavaScript tests cover sustained threshold crossings and final serial lines. A standalone C++11 test covers decimation warm-up, one-second rolling-window cadence, and ring-buffer chronological ordering; the C++ test was compiled and passed locally with `g++ -std=c++11 -Wall -Wextra -Werror`. The full Node suite and target Arduino firmware build remain unverified.
+6. **Stale/invalid reading handling** — invalid SpO2 results now clear the previously displayed value; a valid SpO2 value expires after 3 s without a new valid update, and the complete frame stream is marked lost after 2 s without a frame. The UI marks missing/stale values as idle rather than retaining a normal-looking old reading. These are conservative prototype timeouts, not clinical alarm thresholds.
+7. **Regression tests added** — JavaScript tests cover sustained threshold crossings, final serial lines, invalid SpO2 clearing, and stale-stream expiry. A standalone C++11 test covers decimation warm-up, one-second rolling-window cadence, and ring-buffer chronological ordering; the C++ test was compiled and passed locally with `g++ -std=c++11 -Wall -Wextra -Werror`. The full Node suite and target Arduino firmware build remain unverified.
 
 ## High-priority issues still open
 
@@ -35,9 +36,9 @@ Timer1 is now configured at approximately 8.003 Hz (16 MHz / (1024 × 1953)) so 
 
 Firmware now calls each sensor's initialization once and does not start the sampling timer if either sensor fails its initial connection check. Runtime disconnection, sensor reset/recovery, stale-data state, and signal-quality reporting are still not implemented in the app or protocol.
 
-### 5. Stale physiological values
+### 5. Runtime freshness and signal quality
 
-The app stores the last valid SpO2 value but does not expire it when updates stop. A disconnected or poor-quality sensor can therefore leave an old value visible. Add acquisition timestamps and freshness timeouts; render stale/missing/invalid distinctly and suppress physiological alarm decisions based on stale values. Apply the same principle to heart rate and chest movement.
+The app previously retained the last valid SpO2 value indefinitely. The development branch now clears SpO2 on an invalid sensor result and expires it after 3 seconds without a new valid result. It also marks the entire frame stream stale after 2 seconds without a new frame, clears the displayed HR, and changes the UI to a neutral "signal lost/stale" state rather than showing an old value as current. These are engineering freshness timeouts only; they are not clinical alarm settings. Runtime sensor quality, perfusion, motion-artifact, and recovery diagnostics remain unresolved.
 
 ### 6. Clocking and gaps in the web engine
 
