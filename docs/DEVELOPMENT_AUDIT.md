@@ -34,7 +34,7 @@ Timer1 is now configured at approximately 8.003 Hz (16 MHz / (1024 × 1953)) so 
 
 ### 4. Sensor initialization and status
 
-Firmware now calls each sensor's initialization once and does not start the sampling timer if either sensor fails its initial connection check. Runtime disconnection, sensor reset/recovery, stale-data state, and signal-quality reporting are still not implemented in the app or protocol.
+Firmware now calls each sensor's initialization once and does not start the sampling timer if either sensor fails its initial connection check. The app now detects stream silence with host-side timeouts, but the protocol still has no source timestamps or explicit per-sensor state. Runtime sensor reset/recovery and signal-quality reporting are still not implemented.
 
 ### 5. Runtime freshness and signal quality
 
