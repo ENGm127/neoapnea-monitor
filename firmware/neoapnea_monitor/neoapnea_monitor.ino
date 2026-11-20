@@ -16,10 +16,9 @@
  *   "SparkFun MAX3010x Pulse and Proximity Sensor Library"   -> MAX30105.h, spo2_algorithm.h
  *
  * Sampling:
- *   Accelerometer: only the z axis is used. Timer1 sets a flag 10 times per
- *   second (16 MHz / 256 / 6250) and the loop reads the sensor on each flag.
- *   A frame carries the latest two readings, so the stream holds 8
- *   accelerometer samples per second.
+ *   Accelerometer: only the z axis is used. Timer1 samples at approximately
+ *   8 Hz (16 MHz / 1024 / 1953) so two chest samples align with each 0.25 s
+ *   serial frame. The nominal web sample rate is therefore 8 Hz.
  *   Pulse oximeter: sensor configured at 200 Hz with 2-sample on-chip
  *   averaging, yielding a nominal 100 FIFO samples/s. The browser receives
  *   red samples at 100 Hz. For the SparkFun algorithm, firmware averages
@@ -115,14 +114,15 @@ void setup() {
   oximeter.setup(ledBrightness, sampleAverage, ledMode, sampleRate, pulseWidth, adcRange);
 
   // Start the chest sampling timer only after both sensors are initialized.
-  // Timer1 in CTC mode: 16 MHz / (256 * 6250) = 10 Hz.
+  // Timer1 in CTC mode: 16 MHz / (1024 * 1953) ~= 8.003 Hz.
+  // Two samples align nominally with each 25-sample PPG frame (0.25 s).
   cli();
   TCCR1A = 0;
   TCCR1B = 0;
   TCNT1 = 0;
-  OCR1A = 6249;
+  OCR1A = 1952;
   TCCR1B |= (1 << WGM12);
-  TCCR1B |= (1 << CS12);
+  TCCR1B |= (1 << CS12) | (1 << CS10);
   TIMSK1 |= (1 << OCIE1A);
   sei();
   sensorsReady = true;
