@@ -58,6 +58,7 @@ const uint8_t SPO2_UPDATE_SAMPLES = 25;    // update every 1 s after the initial
 const int SPO2_WINDOW = 100;                // 4 s at the algorithm's required 25 Hz
 
 volatile bool accelerometerDue = false;    // set by the Timer1 interrupt
+bool sensorsReady = false;
 
 int32_t frame[FRAME_LENGTH];               // signed chest counts and full-width PPG values
 
@@ -92,27 +93,17 @@ void setup() {
   Wire.begin();
   accelerometer.initialize();
 
-  // Timer1 in CTC mode with a 256 prescaler: compare match every
-  // 6250 ticks, 16 MHz / (256 * 6250) = 10 Hz.
-  cli();
-  TCCR1A = 0;
-  TCCR1B = 0;
-  TCNT1 = 0;
-  OCR1A = 6249;
-  TCCR1B |= (1 << WGM12);    // CTC mode
-  TCCR1B |= (1 << CS12);     // prescaler 256
-  TIMSK1 |= (1 << OCIE1A);   // enable the compare A interrupt
-  sei();
+  const bool accelerometerOk = accelerometer.testConnection();
+  Serial.println(accelerometerOk ? "Accelerometer ready" : "ERROR: accelerometer not found");
 
-  if (accelerometer.testConnection()) {
-    Serial.println("Accelerometer ready");
-  } else {
-    Serial.println("Accelerometer not found");
-  }
-  if (oximeter.begin() == false) {
-    Serial.println("Pulse oximeter not found");
-  } else {
-    Serial.println("Pulse oximeter ready");
+  const bool oximeterOk = oximeter.begin();
+  Serial.println(oximeterOk ? "Pulse oximeter ready" : "ERROR: pulse oximeter not found");
+
+  // Do not start acquisition or emit plausible-looking data if either sensor
+  // failed initialization. The app will receive an explicit error status.
+  if (!accelerometerOk || !oximeterOk) {
+    Serial.println("ERROR: sensor initialization failed; acquisition stopped");
+    return;
   }
 
   byte ledBrightness = 60;   // 0 = off to 255 = 50 mA
@@ -123,11 +114,26 @@ void setup() {
   int adcRange = 4096;       // 2048, 4096, 8192 or 16384
   oximeter.setup(ledBrightness, sampleAverage, ledMode, sampleRate, pulseWidth, adcRange);
 
+  // Start the chest sampling timer only after both sensors are initialized.
+  // Timer1 in CTC mode: 16 MHz / (256 * 6250) = 10 Hz.
+  cli();
+  TCCR1A = 0;
+  TCCR1B = 0;
+  TCNT1 = 0;
+  OCR1A = 6249;
+  TCCR1B |= (1 << WGM12);
+  TCCR1B |= (1 << CS12);
+  TIMSK1 |= (1 << OCIE1A);
+  sei();
+  sensorsReady = true;
+
   frame[0] = 1;
   frame[FRAME_LENGTH - 1] = 1;
 }
 
 void loop() {
+  if (!sensorsReady) return;
+
   if (accelerometerDue) {
     int16_t ax, ay, az;
     accelerometer.getAcceleration(&ax, &ay, &az);
@@ -160,16 +166,22 @@ void loop() {
       spo2RedRing[spo2WriteIndex] = redAccumulator / SPO2_DECIMATION;
       spo2IrRing[spo2WriteIndex] = irAccumulator / SPO2_DECIMATION;
       spo2WriteIndex = (spo2WriteIndex + 1) % SPO2_WINDOW;
-      if (spo2SamplesStored < SPO2_WINDOW) spo2SamplesStored++;
-      if (spo2SamplesStored == SPO2_WINDOW && spo2SamplesSinceUpdate < SPO2_UPDATE_SAMPLES) {
+      bool calculateSpo2 = false;
+      if (spo2SamplesStored < SPO2_WINDOW) {
+        spo2SamplesStored++;
+        calculateSpo2 = (spo2SamplesStored == SPO2_WINDOW); // first complete 4 s window
+      } else {
         spo2SamplesSinceUpdate++;
+        if (spo2SamplesSinceUpdate >= SPO2_UPDATE_SAMPLES) {
+          calculateSpo2 = true; // then update once per second
+          spo2SamplesSinceUpdate = 0;
+        }
       }
       redAccumulator = 0;
       irAccumulator = 0;
       decimationCount = 0;
 
-      if (spo2SamplesStored == SPO2_WINDOW &&
-          (spo2SamplesSinceUpdate == SPO2_UPDATE_SAMPLES || spo2SamplesSinceUpdate == 0)) {
+      if (calculateSpo2) {
         // Ring write index points to the oldest sample. Linearize the last
         // 4 seconds because the Maxim routine expects chronological samples.
         for (int i = 0; i < SPO2_WINDOW; i++) {
@@ -185,7 +197,6 @@ void loop() {
         Serial.print(spo2, DEC);
         Serial.print(", ");
         Serial.println(spo2Valid, DEC);
-        spo2SamplesSinceUpdate = 0;
       }
     }
 
