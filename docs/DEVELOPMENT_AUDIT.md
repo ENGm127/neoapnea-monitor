@@ -13,7 +13,7 @@ This is a software/firmware engineering audit of the current prototype. It is no
 3. **PPG integer width** — firmware frame storage is now `int32_t`, red samples are `uint32_t`, and IR samples are copied without narrowing through a 16-bit AVR `int`.
 4. **SpO2 algorithm input timing** — firmware now preserves the 100 Hz raw PPG stream for the browser, averages each non-overlapping group of four red/IR samples to 25 Hz for the SparkFun routine, maintains a rolling 100-sample (4 s) window, computes the first estimate after 4 s, and updates every 1 s thereafter. This matches the source constants but is not validation of the oximetry result.
 5. **Sensor startup gating** — firmware initializes each sensor once and does not start the acquisition timer if either sensor initialization fails.
-6. **Regression tests added** — tests cover sustained threshold crossings and final serial lines. They still need to be run in CI or a local Node 20+ environment before this branch is considered verified.
+6. **Regression tests added** — JavaScript tests cover sustained threshold crossings and final serial lines. A standalone C++11 test covers decimation warm-up, one-second rolling-window cadence, and ring-buffer chronological ordering; the C++ test was compiled and passed locally with `g++ -std=c++11 -Wall -Wextra -Werror`. The full Node suite and target Arduino firmware build remain unverified.
 
 ## High-priority issues still open
 
@@ -54,7 +54,7 @@ Patient names, bed identifiers, and episode data are persisted in browser `local
 ## Validation plan (required before any claim of readiness)
 
 - Run all Node tests on Node 20+ and add deterministic tests for sensor timeouts, sample gaps, invalid/out-of-range frames, sequence loss, reconnect/disconnect, and sustained/motion-contaminated respiratory signals.
-- Compile firmware for Arduino Mega 2560 with the exact documented library versions; inspect SRAM use and confirm types against the selected board's ABI.
+- Compile firmware for Arduino Mega 2560 with the exact documented library versions; inspect SRAM use and confirm types against the selected board's ABI. The standalone SpO2 stream helper has passed a host C++11 unit test, but this is not a substitute for compiling the complete sketch.
 - Bench-test the MAX30102 stream with a logic analyzer or timestamped acquisition logs to establish the actual output sample rate, FIFO overflow rate, and timing jitter.
 - Compare PPG-derived pulse rate and SpO2 with a suitable calibrated reference/functional tester across controlled pulse rates, saturation levels, motion, and low perfusion. Do not claim neonatal accuracy from a generic MAX30102 breakout.
 - Compare respiratory detection with a calibrated respiratory simulator and an independent airflow/respiratory effort reference. Include different orientations, strap tensions, amplitudes, rates, pauses, and motion artifacts.
