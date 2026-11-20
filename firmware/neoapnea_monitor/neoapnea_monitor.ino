@@ -133,7 +133,7 @@ void loop() {
   while (oximeter.available()) {
     redSamples[ppgCount] = oximeter.getFIFORed();
     redWindow[windowCount] = redSamples[ppgCount];
-    // Through int, like the red samples, so the SpO2 estimate sees 16-bit values.
+    // Preserve the full sensor output; AVR int is only 16 bits on the Mega.
     irWindow[windowCount] = oximeter.getFIFOIR();
     ppgCount++;
     windowCount++;
