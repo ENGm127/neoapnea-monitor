@@ -160,14 +160,17 @@ export class Monitor {
     const s = this.s;
     for (const [t, v] of samples) {
       const above = v > s.breathThreshold;
-      if (above) {
-        if (!this.wasAbove) this.breathOnsets.push(t);
+      if (above && !this.wasAbove) {
+        // A breath event is the threshold's rising edge, not every sample
+        // that remains above it. Keeping the onset stable prevents sustained
+        // peaks from shifting the recorded pause end and duration.
+        this.breathOnsets.push(t);
         if (this.breathing === BREATHING.apnea && this.lastBreath !== null) {
           this.recordEpisode(this.lastBreath, t - this.lastBreath, t);
         }
         this.lastBreath = t;
         this.setBreathing(BREATHING.ok);
-      } else {
+      } else if (!above) {
         const pause = t - (this.lastBreath ?? 0);
         if (pause > s.pauseApneaS) this.setBreathing(BREATHING.apnea);
         else if (pause > s.pauseWarningS) this.setBreathing(BREATHING.warning);
