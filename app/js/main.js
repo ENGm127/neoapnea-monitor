@@ -144,7 +144,8 @@ function setAlarm(id, level, text) {
 
 function renderLive() {
   const m = monitor;
-  const hasSignal = m.elapsed > 0;
+  m.expireStale(performance.now());
+  const hasSignal = m.elapsed > 0 && !m.frameStale;
   const windowFull = m.elapsed >= SETTINGS.windowS;
   const pauseLevel = { [BREATHING.ok]: "ok", [BREATHING.warning]: "warning", [BREATHING.apnea]: "alarm" }[m.breathing];
   const pause = m.pauseS;
@@ -155,14 +156,15 @@ function renderLive() {
   $("elapsed").textContent = hms(m.elapsed);
   $("rr").textContent = orDash(m.breathsPerMin);
   $("pause").textContent = hasSignal ? pause.toFixed(1) : "--";
-  $("vital-pause").dataset.level = hasSignal ? pauseLevel : "ok";
+  $("vital-pause").dataset.level = hasSignal ? pauseLevel : "idle";
   $("hr").textContent = m.hr > 0 ? m.hr : "--";
-  $("vital-hr").dataset.level = windowFull && m.hrAlarm ? "alarm" : "ok";
+  $("vital-hr").dataset.level = !hasSignal ? "idle" : windowFull && m.hrAlarm ? "alarm" : "ok";
   $("spo2").textContent = orDash(m.spo2);
-  $("vital-spo2").dataset.level = m.spo2Alarm ? "alarm" : "ok";
+  $("vital-spo2").dataset.level = !hasSignal || m.spo2Stale ? "idle" : m.spo2Alarm ? "alarm" : "ok";
 
   if (!hasSignal) {
-    for (const id of ["alarm-breathing", "alarm-hr", "alarm-spo2"]) setAlarm(id, "idle", "Waiting for signal");
+    const message = m.frameStale ? "Signal lost" : "Waiting for signal";
+    for (const id of ["alarm-breathing", "alarm-hr", "alarm-spo2"]) setAlarm(id, "idle", message);
   } else {
     setAlarm("alarm-breathing", pauseLevel, {
       ok: "Normal",
@@ -172,7 +174,7 @@ function renderLive() {
     if (!windowFull) setAlarm("alarm-hr", "idle", "Measuring");
     else if (!m.hrAlarm) setAlarm("alarm-hr", "ok", "In range");
     else setAlarm("alarm-hr", "alarm", m.hr === 0 ? "No pulse detected" : `${m.hr < SETTINGS.hrLow ? "Low" : "High"} · ${m.hr} bpm`);
-    if (m.spo2 === null) setAlarm("alarm-spo2", "idle", "No reading yet");
+    if (m.spo2 === null) setAlarm("alarm-spo2", "idle", m.spo2Stale ? "Signal stale" : "No valid reading yet");
     else setAlarm("alarm-spo2", m.spo2Alarm ? "alarm" : "ok", m.spo2Alarm ? `Low · ${m.spo2} %` : "In range");
   }
   const anyAlarm = pauseLevel === "alarm" || (windowFull && m.hrAlarm) || m.spo2Alarm;
