@@ -24,6 +24,7 @@ export const SETTINGS = {
 export const BREATHING = { ok: "ok", warning: "warning", apnea: "apnea" };
 
 const mean = (v) => v.reduce((a, b) => a + b, 0) / v.length;
+const monotonicNow = () => globalThis.performance?.now?.() ?? Date.now();
 
 export class Monitor {
   /**
@@ -53,6 +54,10 @@ export class Monitor {
     this.breathing = BREATHING.ok;
     this.hrAlarm = false;
     this.spo2Alarm = false;
+    this.lastFrameReceivedAt = null;
+    this.lastSpo2ReceivedAt = null;
+    this.frameStale = false;
+    this.spo2Stale = false;
     this.lastBreath = null;   // seconds since start of the last sample above the threshold
     this.breathOnsets = [];   // seconds since start of each breath
     this.wasAbove = false;
@@ -107,8 +112,16 @@ export class Monitor {
     }
     const spo2 = parseSpo2(line);
     if (spo2) {
-      // The SparkFun algorithm reports -999 or implausible values when it has no reading.
-      if (spo2.valid && spo2.value > 60 && spo2.value <= 100) this.spo2 = spo2.value;
+      // Never keep displaying a previous value after an invalid sensor result.
+      if (spo2.valid && spo2.value > 60 && spo2.value <= 100) {
+        this.spo2 = spo2.value;
+        this.lastSpo2ReceivedAt = monotonicNow();
+        this.spo2Stale = false;
+      } else {
+        this.spo2 = null;
+        this.spo2Alarm = false;
+        this.spo2Stale = false;
+      }
       return "spo2";
     }
     return null;
@@ -116,6 +129,8 @@ export class Monitor {
 
   processFrame(chestSamples, ppgSamples) {
     const s = this.s;
+    this.lastFrameReceivedAt = monotonicNow();
+    this.frameStale = false;
     const fresh = [];
     for (const v of chestSamples) {
       const t = this.nChest / s.fsChest;
@@ -153,6 +168,24 @@ export class Monitor {
 
     if (windowFull && this.nChest % (s.fsChest * s.trendEveryS) === 0) this.storeTrend();
     this.emit("frame", this);
+  }
+
+  /**
+   * Expires values when their source stops updating. This uses a monotonic
+   * receive clock, not sample counts, so a frozen/disconnected stream cannot
+   * leave an old vital sign looking current.
+   */
+  expireStale(now = monotonicNow()) {
+    if (this.lastFrameReceivedAt !== null && now - this.lastFrameReceivedAt > 2000) {
+      this.frameStale = true;
+      this.hr = 0;
+      this.hrAlarm = false;
+    }
+    if (this.lastSpo2ReceivedAt !== null && now - this.lastSpo2ReceivedAt > 3000) {
+      this.spo2 = null;
+      this.spo2Alarm = false;
+      this.spo2Stale = true;
+    }
   }
 
   /** A breath is a chest sample above the threshold; the alarm grows with the time since the last one. */
