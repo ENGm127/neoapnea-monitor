@@ -140,10 +140,10 @@ Each recorded episode has these fields, in the app and in the CSV and JSON expor
 
 ```
 Buffer: 1, az0, az1, red0, red1, ..., red24, 1    every 0.25 s
-SPO2= 96, 1                                       after every 100 PPG samples
+SPO2= 96, 1                                       after the initial 4 s, then once per second
 ```
 
-Text at 57600 baud, one line per message. A `Buffer` line carries a start marker, two chest samples (z axis, raw counts), 25 PPG samples (red LED) and an end marker; lines with any other shape are dropped. `SPO2` carries the value and a validity flag. Any other line, such as the start-up messages, is ignored. [`app/js/simulator.js`](app/js/simulator.js) produces the same lines.
+Text at 57600 baud, one line per message. A `Buffer` line carries a start marker, two chest samples (z axis, raw counts), 25 PPG samples (red LED) and an end marker; lines with any other shape are dropped. `SPO2` carries the value and a validity flag; the first estimate follows a four-second warm-up, then updates once per second using a rolling four-second window. Any other line, such as the start-up messages, is ignored. [`app/js/simulator.js`](app/js/simulator.js) produces the same lines.
 
 ## Project layout
 
