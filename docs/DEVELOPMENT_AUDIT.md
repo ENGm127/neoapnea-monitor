@@ -20,7 +20,7 @@ This is a software/firmware engineering audit of the current prototype. It is no
 
 ### 1. SpO2 timing contract — corrected in software, hardware verification pending
 
-The SparkFun `spo2_algorithm.h` defines `FreqS 25` and `BUFFER_SIZE (FreqS * 4)`: exactly 100 samples representing four seconds at 25 Hz. The MAX30102 is configured for a nominal 100 FIFO samples/s (200 Hz conversion rate with two-sample on-chip averaging). Firmware now keeps the 100 Hz red stream for the browser and forms a separate 25 Hz stream by averaging non-overlapping groups of four red and IR samples. It maintains a rolling 100-sample window, calculates the first estimate after four seconds, and updates after each additional 25 samples (one second). The chronological window is copied from a ring buffer before calling the SparkFun routine.
+The SparkFun `spo2_algorithm.h` defines `FreqS 25` and `BUFFER_SIZE (FreqS * 4)`: exactly 100 samples representing four seconds at 25 Hz. The MAX30102 is configured for 100 samples/s with on-chip averaging disabled, preserving a nominal 100 Hz FIFO stream for the browser. Firmware forms a separate 25 Hz stream by averaging non-overlapping groups of four red and IR samples. This is consistent with the 25 Hz / 100-sample window in SparkFun's own example, which also uses a four-sample average at a 100 samples/s conversion setting. It maintains a rolling 100-sample window, calculates the first estimate after four seconds, and updates after each additional 25 samples (one second). The chronological window is copied from a ring buffer before calling the SparkFun routine.
 
 This fixes the documented sample-rate/window mismatch in software. It does **not** validate the simple four-sample boxcar decimator as a clinically adequate anti-alias filter, establish the actual FIFO rate under real I2C/loop load, detect FIFO overflow, or validate SpO2 accuracy. Confirm the effective rate and sample loss with timestamped bench measurements; inspect FIFO overflow counters if exposed by the library. The MAX30102 breakout is not thereby converted into a validated neonatal pulse oximeter.
 
@@ -65,7 +65,7 @@ Patient names, bed identifiers, and episode data are persisted in browser `local
 ## Primary references
 
 - SparkFun MAX3010x library, `spo2_algorithm.h`: https://github.com/sparkfun/SparkFun_MAX3010x_Sensor_Library/blob/master/src/spo2_algorithm.h
-- SparkFun MAX3010x library, `Example8_SPO2.ino`: https://github.com/sparkfun/SparkFun_MAX3010x_Sensor_Library/blob/master/examples/Example8_SPO2/Example8_SPO2.ino
+- SparkFun MAX3010x library, `Example8_SPO2.ino` (100 samples/s, sampleAverage=4, 100-sample window and 25-sample rolling update): https://github.com/sparkfun/SparkFun_MAX3010x_Sensor_Library/blob/master/examples/Example8_SPO2/Example8_SPO2.ino
 - Eichenwald EC; AAP Committee on Fetus and Newborn. Apnea of Prematurity. *Pediatrics*. 2016;137(1):e20153757. https://doi.org/10.1542/peds.2015-3757
 - FDA. Pulse Oximeters — Premarket Notification Submissions (510(k)s): Guidance for Industry and FDA Staff. https://www.fda.gov/regulatory-information/search-fda-guidance-documents/pulse-oximeters-premarket-notification-submissions-510ks-guidance-industry-and-drug
 - PhysioNet Preterm Infant Cardio-Respiratory Signals Database: https://physionet.org/content/picsdb/
