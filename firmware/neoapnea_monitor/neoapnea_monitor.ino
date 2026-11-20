@@ -77,7 +77,6 @@ void setup() {
   Serial.begin(57600);
   Wire.begin();
   accelerometer.initialize();
-  oximeter.begin();
 
   // Timer1 in CTC mode with a 256 prescaler: compare match every
   // 6250 ticks, 16 MHz / (256 * 6250) = 10 Hz.
