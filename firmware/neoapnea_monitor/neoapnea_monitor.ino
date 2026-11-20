@@ -35,8 +35,8 @@
  *   SparkFun's maxim_heart_rate_and_oxygen_saturation() assumes 25 samples
  *   per second (FreqS in spo2_algorithm.h), but it is given 100 samples taken
  *   at 100 Hz, so treat the SpO2 it returns as unvalidated.
- *   Red and infrared samples are stored as 16-bit int, so readings must stay
- *   below 32768 to arrive unchanged.
+ *   PPG samples are stored in 32-bit variables to preserve the sensor's raw
+ *   range. Sample timing and physiological accuracy still require validation.
  */
 
 #include "Wire.h"
