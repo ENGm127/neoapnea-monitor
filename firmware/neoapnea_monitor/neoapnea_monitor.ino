@@ -20,8 +20,11 @@
  *   second (16 MHz / 256 / 6250) and the loop reads the sensor on each flag.
  *   A frame carries the latest two readings, so the stream holds 8
  *   accelerometer samples per second.
- *   Pulse oximeter: red and infrared at 200 Hz with 2-sample averaging,
- *   100 samples per second.
+ *   Pulse oximeter: sensor configured at 200 Hz with 2-sample on-chip
+ *   averaging, yielding a nominal 100 FIFO samples/s. The browser receives
+ *   red samples at 100 Hz. For the SparkFun algorithm, firmware averages
+ *   non-overlapping groups of four samples to create a 25 Hz stream, keeps
+ *   a rolling 100-sample (4 s) window, and updates the estimate once per second.
  *
  * Serial output at 57600 baud:
  *   Buffer: 1, az0, az1, red0, ..., red24, 1    every 0.25 s, 29 values;
@@ -32,11 +35,11 @@
  * Lines that start with anything else are status messages; the app ignores them.
  *
  * Known limitations:
- *   SparkFun's maxim_heart_rate_and_oxygen_saturation() assumes 25 samples
- *   per second (FreqS in spo2_algorithm.h), but it is given 100 samples taken
- *   at 100 Hz, so treat the SpO2 it returns as unvalidated.
- *   PPG samples are stored in 32-bit variables to preserve the sensor's raw
- *   range. Sample timing and physiological accuracy still require validation.
+ *   The SparkFun algorithm's 25 Hz input contract is matched by a four-sample
+ *   boxcar average/decimator. The estimate remains an unvalidated research
+ *   output: correct sample rate does not establish SpO2 accuracy or neonatal
+ *   suitability. PPG samples are stored in 32-bit variables to preserve the
+ *   sensor's raw range. Actual FIFO timing and loss still require measurement.
  */
 
 #include "Wire.h"
@@ -50,7 +53,9 @@ MAX30105 oximeter;
 const int PPG_PER_FRAME = 25;              // red samples in one frame, 0.25 s at 100 Hz
 const int ACC_PER_FRAME = 2;               // accelerometer samples in one frame
 const int FRAME_LENGTH = 1 + ACC_PER_FRAME + PPG_PER_FRAME + 1;
-const int SPO2_WINDOW = 100;               // samples per SpO2 estimate
+const uint8_t SPO2_DECIMATION = 4;         // 100 Hz raw FIFO -> 25 Hz algorithm input
+const uint8_t SPO2_UPDATE_SAMPLES = 25;    // update every 1 s after the initial 4 s
+const int SPO2_WINDOW = 100;                // 4 s at the algorithm's required 25 Hz
 
 volatile bool accelerometerDue = false;    // set by the Timer1 interrupt
 
@@ -64,9 +69,18 @@ uint32_t redSamples[PPG_PER_FRAME];
 int ppgCount = 0;
 bool ppgReady = false;
 
-uint32_t redWindow[SPO2_WINDOW];
-uint32_t irWindow[SPO2_WINDOW];
-int windowCount = 0;
+// MAX30102 FIFO output is nominally 100 Hz. Keep browser PPG at this rate,
+ // but feed the SparkFun routine a separately averaged 25 Hz stream.
+uint32_t spo2RedRing[SPO2_WINDOW];
+uint32_t spo2IrRing[SPO2_WINDOW];
+uint32_t spo2RedLinear[SPO2_WINDOW];
+uint32_t spo2IrLinear[SPO2_WINDOW];
+uint32_t redAccumulator = 0;
+uint32_t irAccumulator = 0;
+uint8_t decimationCount = 0;
+uint8_t spo2WriteIndex = 0;       // next ring slot; also oldest sample once full
+uint8_t spo2SamplesStored = 0;
+uint8_t spo2SamplesSinceUpdate = 0;
 
 int32_t spo2;
 int8_t spo2Valid;
@@ -131,13 +145,49 @@ void loop() {
 
   oximeter.check();
   while (oximeter.available()) {
-    redSamples[ppgCount] = oximeter.getFIFORed();
-    redWindow[windowCount] = redSamples[ppgCount];
-    // Preserve the full sensor output; AVR int is only 16 bits on the Mega.
-    irWindow[windowCount] = oximeter.getFIFOIR();
+    const uint32_t red = oximeter.getFIFORed();
+    const uint32_t ir = oximeter.getFIFOIR();
+    redSamples[ppgCount] = red;
     ppgCount++;
-    windowCount++;
     oximeter.nextSample();
+
+    // Boxcar low-pass followed by decimation: 4 raw 100 Hz samples become
+    // one 25 Hz sample, matching FreqS=25 and BUFFER_SIZE=100 in SparkFun.
+    redAccumulator += red;
+    irAccumulator += ir;
+    decimationCount++;
+    if (decimationCount == SPO2_DECIMATION) {
+      spo2RedRing[spo2WriteIndex] = redAccumulator / SPO2_DECIMATION;
+      spo2IrRing[spo2WriteIndex] = irAccumulator / SPO2_DECIMATION;
+      spo2WriteIndex = (spo2WriteIndex + 1) % SPO2_WINDOW;
+      if (spo2SamplesStored < SPO2_WINDOW) spo2SamplesStored++;
+      if (spo2SamplesStored == SPO2_WINDOW && spo2SamplesSinceUpdate < SPO2_UPDATE_SAMPLES) {
+        spo2SamplesSinceUpdate++;
+      }
+      redAccumulator = 0;
+      irAccumulator = 0;
+      decimationCount = 0;
+
+      if (spo2SamplesStored == SPO2_WINDOW &&
+          (spo2SamplesSinceUpdate == SPO2_UPDATE_SAMPLES || spo2SamplesSinceUpdate == 0)) {
+        // Ring write index points to the oldest sample. Linearize the last
+        // 4 seconds because the Maxim routine expects chronological samples.
+        for (int i = 0; i < SPO2_WINDOW; i++) {
+          const uint8_t index = (spo2WriteIndex + i) % SPO2_WINDOW;
+          spo2RedLinear[i] = spo2RedRing[index];
+          spo2IrLinear[i] = spo2IrRing[index];
+        }
+        maxim_heart_rate_and_oxygen_saturation(
+          spo2IrLinear, SPO2_WINDOW, spo2RedLinear,
+          &spo2, &spo2Valid, &heartRate, &heartRateValid
+        );
+        Serial.print(F("SPO2= "));
+        Serial.print(spo2, DEC);
+        Serial.print(", ");
+        Serial.println(spo2Valid, DEC);
+        spo2SamplesSinceUpdate = 0;
+      }
+    }
 
     if (ppgCount == PPG_PER_FRAME) {
       for (int i = 0; i < PPG_PER_FRAME; i++) {
@@ -147,15 +197,6 @@ void loop() {
       ppgReady = true;
     }
 
-    if (windowCount == SPO2_WINDOW) {
-      maxim_heart_rate_and_oxygen_saturation(irWindow, SPO2_WINDOW, redWindow, &spo2, &spo2Valid,
-                                             &heartRate, &heartRateValid);
-      windowCount = 0;
-      Serial.print(F("SPO2= "));
-      Serial.print(spo2, DEC);
-      Serial.print(", ");
-      Serial.println(spo2Valid, DEC);
-    }
   }
 
   if (accReady && ppgReady) {
