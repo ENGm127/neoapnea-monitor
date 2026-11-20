@@ -11,15 +11,17 @@ This is a software/firmware engineering audit of the current prototype. It is no
 1. **Breath event edge handling** — the detector now records a breath at the rising edge of the threshold crossing. Samples that remain above threshold no longer keep moving `lastBreath` forward. This corrects event bookkeeping only; it does not make a fixed raw-Z threshold physiologically valid.
 2. **Serial EOF handling** — `LineSplitter.flush()` emits a final unterminated line, and the Web Serial reader flushes it when the stream ends.
 3. **PPG integer width** — firmware frame storage is now `int32_t`, red samples are `uint32_t`, and IR samples are copied without narrowing through a 16-bit AVR `int`.
-4. **Regression tests added** — tests cover sustained threshold crossings and final serial lines. They still need to be run in CI or a local Node 20+ environment before this branch is considered verified.
+4. **SpO2 algorithm input timing** — firmware now preserves the 100 Hz raw PPG stream for the browser, averages each non-overlapping group of four red/IR samples to 25 Hz for the SparkFun routine, maintains a rolling 100-sample (4 s) window, computes the first estimate after 4 s, and updates every 1 s thereafter. This matches the source constants but is not validation of the oximetry result.
+5. **Sensor startup gating** — firmware initializes each sensor once and does not start the acquisition timer if either sensor initialization fails.
+6. **Regression tests added** — tests cover sustained threshold crossings and final serial lines. They still need to be run in CI or a local Node 20+ environment before this branch is considered verified.
 
 ## High-priority issues still open
 
-### 1. SpO2 sample-rate contract is incorrect
+### 1. SpO2 timing contract — corrected in software, hardware verification pending
 
-The SparkFun `spo2_algorithm.h` defines `FreqS 25` and `BUFFER_SIZE (FreqS * 4)`, i.e. a 100-sample, four-second window at 25 Hz. The current firmware configures the MAX30102 for 200 Hz with sample averaging of two (nominally 100 output samples/s), then passes 100 consecutive samples to that algorithm. It therefore feeds approximately one second of data while the algorithm interprets it as four seconds. The heart-rate estimate internal to that routine is also time-scaled incorrectly. Do not use its current SpO2/HR outputs.
+The SparkFun `spo2_algorithm.h` defines `FreqS 25` and `BUFFER_SIZE (FreqS * 4)`: exactly 100 samples representing four seconds at 25 Hz. The MAX30102 is configured for a nominal 100 FIFO samples/s (200 Hz conversion rate with two-sample on-chip averaging). Firmware now keeps the 100 Hz red stream for the browser and forms a separate 25 Hz stream by averaging non-overlapping groups of four red and IR samples. It maintains a rolling 100-sample window, calculates the first estimate after four seconds, and updates after each additional 25 samples (one second). The chronological window is copied from a ring buffer before calling the SparkFun routine.
 
-**Required design decision:** choose a deliberate effective 25 Hz acquisition path and preserve a rolling 100-sample (4 s) window with a 25-sample (1 s) update, or replace the algorithm with one whose documented sample-rate/window contract matches the actual stream. Verify the actual MAX30102 FIFO rate and dropped-sample behavior on hardware. Do not merely change the web app's `fsPpg` constant.
+This fixes the documented sample-rate/window mismatch in software. It does **not** validate the simple four-sample boxcar decimator as a clinically adequate anti-alias filter, establish the actual FIFO rate under real I2C/loop load, detect FIFO overflow, or validate SpO2 accuracy. Confirm the effective rate and sample loss with timestamped bench measurements; inspect FIFO overflow counters if exposed by the library. The MAX30102 breakout is not thereby converted into a validated neonatal pulse oximeter.
 
 ### 2. Chest movement is not airflow
 
@@ -31,7 +33,7 @@ Timer1 generates 10 Hz interrupts, but `volatile bool accelerometerDue` is a one
 
 ### 4. Sensor initialization and status
 
-The sketch currently calls `oximeter.begin()` twice, configures the device even if initialization fails, and starts Timer1 regardless of accelerometer connection status. Implement one-time initialization with explicit sensor state, and do not present a failed/unavailable sensor as a live stream. Add connection, stale-data, and signal-quality states in the app.
+Firmware now calls each sensor's initialization once and does not start the sampling timer if either sensor fails its initial connection check. Runtime disconnection, sensor reset/recovery, stale-data state, and signal-quality reporting are still not implemented in the app or protocol.
 
 ### 5. Stale physiological values
 
@@ -69,4 +71,4 @@ Patient names, bed identifiers, and episode data are persisted in browser `local
 
 ## Current disposition
 
-**Not for clinical use.** The changes in this branch are limited to software correctness and data integrity. The SpO2 timing contract, acquisition architecture, respiratory sensing validity, timestamping, signal quality/freshness, and verification remain unresolved.
+**Not for clinical use.** The software-side SpO2 sample-rate/window mismatch has been corrected, but the decimator and actual hardware timing still require bench verification. Acquisition architecture, respiratory sensing validity, timestamping, signal quality/freshness, and verification remain unresolved.
